@@ -1,0 +1,9 @@
+python-telegram-bot[ext]
+sqlalchemy[asyncio]
+psycopg2-binary # Or your preferred database driver
+pandas
+matplotlib
+dataframe_image
+numpy
+apscheduler
+python-dotenv
