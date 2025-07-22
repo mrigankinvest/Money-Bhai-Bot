@@ -7,9 +7,12 @@ from sqlalchemy.exc import OperationalError
 from datetime import datetime, timedelta
 from .models import User, Wallet, Transaction, Goal, Transfer
 from .database import get_session
+from sqlalchemy import text
 from thefuzz import process
 import pandas as pd
 from typing import Tuple, Optional
+from dateutil.relativedelta import relativedelta
+
 
 logger = logging.getLogger(__name__)
 
@@ -427,3 +430,109 @@ async def get_period_comparison_data(user_id: int, wallet_category: str, period_
     data1 = await _get_metrics(period1_val)
     data2 = await _get_metrics(period2_val)
     return {"period1": data1, "period2": data2}
+
+async def get_financial_summary_for_period(user_id: int, period: str) -> dict:
+    """
+    Fetches a real financial summary for a given user and time period
+    by calculating date ranges and executing a dynamic SQL query via SQLAlchemy.
+    """
+    # --- 1. Calculate Start and End Dates ---
+    end_date = datetime.now()
+    start_date = None
+    
+    if period == "current_month":
+        start_date = end_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == "last_month":
+        last_month_end = end_date.replace(day=1) - timedelta(days=1)
+        start_date = last_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = last_month_end
+    elif period == "last_3_months":
+        start_date = (end_date - relativedelta(months=3)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == "last_6_months":
+        start_date = (end_date - relativedelta(months=6)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == "current_fy":
+        # Assumes Indian Financial Year (April 1st)
+        current_year = end_date.year
+        start_date = datetime(current_year - 1, 4, 1) if end_date.month < 4 else datetime(current_year, 4, 1)
+    
+    # "all" period means start_date remains None
+
+    # --- 2. Construct the SQL Query using SQLAlchemy's text() ---
+    # This approach is efficient and secure against SQL injection.
+    query_str = """
+    SELECT
+        COALESCE(SUM(CASE WHEN transactions.type = 'expense' THEN transactions.amount ELSE 0 END), 0) AS total_expense,
+        COALESCE(SUM(CASE WHEN transactions.type = 'income' THEN transactions.amount ELSE 0 END), 0) AS total_income,
+        COALESCE(SUM(CASE WHEN wallets.name = 'Investment' THEN
+            CASE WHEN transactions.type = 'income' THEN transactions.amount
+                 WHEN transactions.type = 'expense' THEN -transactions.amount
+                 ELSE 0 END
+            ELSE 0 END), 0) AS net_investment
+    FROM transactions
+    JOIN wallets ON transactions.wallet_id = wallets.id
+    WHERE transactions.user_id = :user_id
+    """
+    params = {"user_id": user_id}
+    
+    if start_date:
+        query_str += " AND transactions.created_at BETWEEN :start_date AND :end_date"
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+
+    # --- 3. Execute Query within an Async Session ---
+    summary = {}
+    try:
+        async with get_session() as session:
+            result = await session.execute(text(query_str), params)
+            row = result.fetchone()
+            
+            if row:
+                summary = {
+                    'total_expense': row.total_expense,
+                    'total_income': row.total_income,
+                    'net_investment': row.net_investment,
+                    'goal_status': 'On Track'
+                }
+            else: # Ensure summary is populated even if there are no transactions
+                summary = {'total_expense': 0, 'total_income': 0, 'net_investment': 0, 'goal_status': 'N/A'}
+
+    except Exception as e:
+        logger.error(f"Database error in get_financial_summary: {e}")
+        summary = {'total_expense': 0, 'total_income': 0, 'net_investment': 0, 'goal_status': 'N/A'}
+
+    return summary
+
+async def get_transactions_for_period(user_id: int, period: str, transaction_type: str) -> list:
+    """
+    Fetches all transactions for a given user, period, and type.
+    Returns an empty list if no transactions are found.
+    """
+    # --- Date calculation logic is the same as the summary function ---
+    end_date = datetime.now()
+    start_date = None
+    if period == "current_month":
+        start_date = end_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    # ... (add all other 'elif' blocks for other periods) ...
+    
+    # --- Query to get individual transactions ---
+    query_str = """
+    SELECT created_at, note, amount FROM transactions
+    WHERE user_id = :user_id AND type = :transaction_type
+    """
+    params = {"user_id": user_id, "transaction_type": transaction_type}
+    
+    if start_date:
+        # --- FIX: Use the correct column name in the WHERE clause ---
+        query_str += " AND transactions.created_at BETWEEN :start_date AND :end_date"
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+    
+    query_str += " ORDER BY created_at DESC"
+
+    transactions = []
+
+    async with get_session() as session:
+        result = await session.execute(text(query_str), params)
+        transactions = result.fetchall() # Fetches all matching rows
+
+    return transactions

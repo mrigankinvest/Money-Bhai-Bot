@@ -3,8 +3,11 @@
 import logging
 import asyncio
 from sqlalchemy import select
-from telegram import Update
 from telegram.ext import ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from utils.telegram_helpers import edit_and_log
+from db.db_writer import get_transactions_for_period
 
 # --- Corrected Imports ---
 from db.database import get_session
@@ -156,3 +159,109 @@ async def follow(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /contact command."""
     await reply_and_log(update, context, "This feature is coming soon!")
+
+async def handle_time_horizon_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Displays the list of available time periods for the financial dashboard.
+    Marks the currently selected period with a checkmark.
+    """
+    # You would typically get the current period from context or a default value
+    current_period = "current_month" 
+
+    keyboard = [
+        [InlineKeyboardButton(f"Current Month{' ✅' if current_period == 'current_month' else ''}", callback_data="set_period_current_month")],
+        [InlineKeyboardButton(f"Last Month{' ✅' if current_period == 'last_month' else ''}", callback_data="set_period_last_month")],
+        [InlineKeyboardButton(f"Last 3 Months{' ✅' if current_period == 'last_3_months' else ''}", callback_data="set_period_last_3_months")],
+        [InlineKeyboardButton(f"Last 6 Months{' ✅' if current_period == 'last_6_months' else ''}", callback_data="set_period_last_6_months")],
+        [InlineKeyboardButton(f"Current Financial Year{' ✅' if current_period == 'current_fy' else ''}", callback_data="set_period_current_fy")],
+        [InlineKeyboardButton("Select Date Range", callback_data="select_date_range")],
+        [InlineKeyboardButton("All Time", callback_data="set_period_all")],
+        [InlineKeyboardButton("⬅️ Back to Dashboard", callback_data="home")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await edit_and_log(
+        query=update.callback_query,
+        context=context,
+        text="Please select a time horizon:",
+        reply_markup=reply_markup
+    )
+
+async def handle_button_press(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles all callback queries from inline buttons.
+    Acts as a central router to direct the user to the correct function.
+    """
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "select_time_horizon":
+        await handle_time_horizon_selection(update, context)
+    
+    elif data.startswith("set_period_"):
+        period = data.replace("set_period_", "")
+        # --- FIX: Save the user's choice in context ---
+        context.user_data["dashboard_period"] = period 
+        await send_wallet_overview(update, context, period=period)
+        
+    elif data == "home":
+        # Reset to default when going home
+        context.user_data["dashboard_period"] = "current_month"
+        await send_wallet_overview(update, context, period="current_month")
+
+    elif data.startswith("view_expenses_"):
+        period = data.replace("view_expenses_", "")
+        await show_expense_details(update, context, period)
+
+    elif data.startswith("view_income_"):
+        period = data.replace("view_income_", "")
+        await show_income_details(update, context, period)
+
+    elif data.startswith("view_investments_"):
+        period = data.replace("view_investments_", "")
+        await show_investment_details(update, context, period)
+        
+    elif data == "show_goal_detail":
+        await show_goal_details(update, context)
+
+    # Add any other top-level button handlers here
+    else:
+        await query.edit_message_text(text=f"Action '{data}' is not yet implemented.")
+
+async def show_expense_details(update: Update, context: ContextTypes.DEFAULT_TYPE, period: str):
+    """
+    Shows a detailed breakdown of expenses for the given period,
+    or a message if no transactions exist.
+    """
+    user_id = update.effective_user.id
+    
+    # --- FIX: Fetch transactions and check if the list is empty ---
+    transactions = await get_transactions_for_period(user_id, period, "expense")
+    
+    if not transactions:
+        text = "You have not added any expenses for this period yet."
+        await edit_and_log(update.callback_query, context, text)
+        return
+
+    # If transactions exist, create a detailed report (placeholder for now)
+    report_text = f"Here are your expenses for *{period.replace('_', ' ').title()}*:\n\n"
+    for t in transactions:
+        report_text += f"- {t.date.strftime('%d %b')}: *₹{t.amount:,.2f}* - {t.note}\n"
+    
+    await edit_and_log(update.callback_query, context, report_text)
+
+async def show_income_details(update: Update, context: ContextTypes.DEFAULT_TYPE, period: str):
+    """(Placeholder) Shows a detailed breakdown of income for the given period."""
+    text = f"Showing detailed income for period: *{period.replace('_', ' ').title()}*"
+    await edit_and_log(update.callback_query, context, text)
+
+async def show_investment_details(update: Update, context: ContextTypes.DEFAULT_TYPE, period: str):
+    """(Placeholder) Shows a detailed breakdown of investments for the given period."""
+    text = f"Showing detailed investments for period: *{period.replace('_', ' ').title()}*"
+    await edit_and_log(update.callback_query, context, text)
+
+async def show_goal_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Placeholder) Shows the status and details of the user's financial goals."""
+    text = "Here are the details of your financial goals..."
+    await edit_and_log(update.callback_query, context, text)

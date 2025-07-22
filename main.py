@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 # Using your config variable
 from config import BOT_TOKEN 
+from handlers import commands 
 # Using your database function
 from db.database import create_db_and_tables 
 from bot_setup import set_bot_commands
@@ -142,6 +143,15 @@ def main() -> None:
 
     # The new onboarding handler now manages the /start command.
     app.add_handler(onboarding_conv_handler)
+
+    # 1. Handler for the /home command
+    # This will trigger the initial dashboard view
+    app.add_handler(CommandHandler("home", commands.home))
+
+    # 2. Handler for all button clicks (callbacks)
+    # This will handle clicks on "Time Horizon", "Expenses", "Income", etc.
+    # We use a pattern that matches the start of your callback data
+    app.add_handler(CallbackQueryHandler(commands.handle_button_press))
     
     # Your existing conversation handlers
     app.add_handler(main_conv_handler)

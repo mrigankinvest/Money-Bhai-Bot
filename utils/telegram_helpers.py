@@ -51,26 +51,39 @@ async def send_dataframe_as_image(df: pd.DataFrame, chat_id: int, context: Conte
         await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=caption)
     os.remove(image_path)
     
-async def send_wallet_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends a high-level financial summary dashboard as a message."""
+async def send_wallet_overview(update: Update, context: ContextTypes.DEFAULT_TYPE, period: str = "current_month"):
+    """
+    Sends an interactive financial dashboard for a specified time period.
+    Defaults to the current month.
+    """
     user_id = update.effective_user.id
-    # get_financial_summary needs to be implemented in your db_writer.py
-    summary = await db_writer.get_financial_summary(user_id)
+    # get_financial_summary_for_period needs to be implemented in your db_writer.py
+    summary = await db_writer.get_financial_summary_for_period(user_id=user_id, period=period)
 
-    expense_text = f"💳 Expenses: ₹{summary.get('total_expense', 0):.2f}"
-    income_text = f"💰 Income: ₹{summary.get('total_income', 0):.2f}"
-    investment_text = f"📈 Investments: ₹{summary.get('net_investment', 0):.2f}"
+    # --- Button texts ---
+    expense_text = f"💳 Expenses: ₹{summary.get('total_expense', 0):,.2f}"
+    income_text = f"💰 Income: ₹{summary.get('total_income', 0):,.2f}"
+    investment_text = f"📈 Investments: ₹{summary.get('net_investment', 0):,.2f}"
     goal_text = f"🎯 Goal: {summary.get('goal_status', 'Not Set')}"
+    
+    # --- Dynamic Time Horizon Button Text ---
+    # This creates a more readable label for the button
+    period_labels = {
+        "current_month": "Current Month",
+        "last_month": "Last Month",
+        "last_3_months": "Last 3 Months",
+        "last_6_months": "Last 6 Months",
+        "current_fy": "Current Financial Year",
+        "all": "All Time",
+    }
+    time_horizon_text = f"📅 Time Horizon: {period_labels.get(period, 'Custom')}"
 
     keyboard = [
-        [
-            InlineKeyboardButton(expense_text, callback_data="show_wallets_Expense"),
-            InlineKeyboardButton(income_text, callback_data="show_wallets_Expense")
-        ],
-        [
-            InlineKeyboardButton(investment_text, callback_data="show_wallets_Investment"),
-            InlineKeyboardButton(goal_text, callback_data="show_goal_detail")
-        ]
+        [InlineKeyboardButton(time_horizon_text, callback_data="select_time_horizon")],
+        [InlineKeyboardButton(expense_text, callback_data=f"view_expenses_{period}")],
+        [InlineKeyboardButton(income_text, callback_data=f"view_income_{period}")],
+        [InlineKeyboardButton(investment_text, callback_data=f"view_investments_{period}")],
+        [InlineKeyboardButton(goal_text, callback_data="show_goal_detail")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
