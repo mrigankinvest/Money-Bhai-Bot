@@ -52,61 +52,36 @@ async def send_dataframe_as_image(df: pd.DataFrame, chat_id: int, context: Conte
     os.remove(image_path)
     
 async def send_wallet_overview(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Sends the main financial dashboard to the user.
-    This function no longer requires a session.
-    """
+    """Sends a high-level financial summary dashboard as a message."""
     user_id = update.effective_user.id
-    
-    # --- FIX: Call db_writer functions without the session argument ---
+    # get_financial_summary needs to be implemented in your db_writer.py
     summary = await db_writer.get_financial_summary(user_id)
-    wallets = await db_writer.get_wallets(user_id)
-    user = await db_writer.get_user_by_telegram_id(user_id)
 
-    user_name = user.name.split()[0] if user and user.name else "Dost"
-    
-    expense_wallets = [w for w in wallets if w.category == 'Expense']
-    investment_wallets = [w for w in wallets if w.category == 'Investment']
+    expense_text = f"💳 Expenses: ₹{summary.get('total_expense', 0):.2f}"
+    income_text = f"💰 Income: ₹{summary.get('total_income', 0):.2f}"
+    investment_text = f"📈 Investments: ₹{summary.get('net_investment', 0):.2f}"
+    goal_text = f"🎯 Goal: {summary.get('goal_status', 'Not Set')}"
 
-    # Build the message text
-    greeting = f"👋 Hello, {user_name}!\n\n"
-    summary_text = (
-        f"*{CATEGORY_EMOJIS['Expense']} Total Expenses:* ₹{summary.get('total_expense', 0):.2f}\n"
-        f"*{CATEGORY_EMOJIS['Investment']} Net Investments:* ₹{summary.get('net_investment', 0):.2f}\n"
-        f"*{CATEGORY_EMOJIS['Goal']} Goal Status:* {summary.get('goal_status', 'Not Set')}"
-    )
-    
     keyboard = [
         [
-            InlineKeyboardButton(f"{CATEGORY_EMOJIS['Expense']} Expense Wallets ({len(expense_wallets)})", callback_data="show_wallets_Expense"),
-            InlineKeyboardButton(f"{CATEGORY_EMOJIS['Investment']} Investment Wallets ({len(investment_wallets)})", callback_data="show_wallets_Investment")
+            InlineKeyboardButton(expense_text, callback_data="show_wallets_Expense"),
+            InlineKeyboardButton(income_text, callback_data="show_wallets_Expense")
         ],
         [
-            InlineKeyboardButton("🔄 Refresh", callback_data="back_to_dashboard")
+            InlineKeyboardButton(investment_text, callback_data="show_wallets_Investment"),
+            InlineKeyboardButton(goal_text, callback_data="show_goal_detail")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    message_text = greeting + summary_text
     
-    # Send or edit the message
-    # Assuming you have reply_and_log and edit_and_log defined elsewhere in this file
+    message_text = "Here is your financial dashboard:"
     if update.callback_query:
-        await edit_and_log(update.callback_query, context, text=message_text, reply_markup=reply_markup, parse_mode="Markdown")
+        await edit_and_log(update.callback_query, context, message_text, reply_markup=reply_markup)
     else:
-        await reply_and_log(update, context, text=message_text, reply_markup=reply_markup, parse_mode="Markdown")
-
-# Make sure other helpers in this file are also updated to not require a session
-# For example:
-async def get_wallets_as_buttons(user_id: int, callback_prefix: str) -> list:
-    wallets = await db_writer.get_wallets(user_id)
-    buttons = []
-    for w in wallets:
-        buttons.append([InlineKeyboardButton(f"💳 {w.name}", callback_data=f"{callback_prefix}{w.id}")])
-    return buttons
+        await reply_and_log(update, context, message_text, reply_markup=reply_markup)
 
 
-async def display_pending_transactions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, session, intro_text: str):
+async def display_pending_transactions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, intro_text: str):
     from handlers.conversations.states import AWAIT_ACTION_CONFIRMATION
     
     user_id = update.effective_user.id
@@ -118,7 +93,7 @@ async def display_pending_transactions_menu(update: Update, context: ContextType
 
     keyboard = []
     for txn_id in pending_txn_ids:
-        txn = await db_writer.get_transaction_by_id(session, user_id, txn_id)
+        txn = await db_writer.get_transaction_by_id(user_id, txn_id)
         if txn:
             emoji = CATEGORY_EMOJIS.get(txn.category.lower(), "✅")
             button_text = f"- {emoji} {txn.category}: {txn.note} (₹{txn.amount}) from {txn.wallet.name}"

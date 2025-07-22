@@ -28,5 +28,5 @@ WELCOME_TEXT = (
 CATEGORY_EMOJIS = {
     "food": "🍔", "groceries": "🛒", "entertainment": "🎮", "bills": "💡",
     "shopping": "🛍️", "travel": "✈️", "education": "📚", "medical": "💊",
-    "income": "💰", "investment": "📈", "other": "🔀"
+    "income": "💰", "Investment": "📈", "other": "🔀",'Expense': '💸','Goal': '💸'
 }
