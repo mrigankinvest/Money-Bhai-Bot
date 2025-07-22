@@ -3,17 +3,15 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from db.database import with_db_session
+# --- Corrected Imports ---
+from db.database import get_session # Use the new session manager
 from db import db_writer
 from utils.telegram_helpers import reply_and_log, edit_and_log
 
-@with_db_session
-async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Starts the deletion process by searching for transactions based on user query
     and displaying them as buttons.
-    This function is intended to be called when the conversation enters the 
-    SELECTING_DELETE_CANDIDATE state.
     """
     query_text = context.user_data.get('delete_query', '')
     if not query_text:
@@ -22,16 +20,14 @@ async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE, sessi
 
     user_id = update.effective_user.id
     
-    # Use your database search function to find potential matches
-    # This assumes db_writer.search_transactions exists and is effective
-    matches = await db_writer.search_transactions(session, user_id, query_text)
+    async with get_session() as session:
+        matches = await db_writer.search_transactions(session, user_id, query_text)
     
     if not matches:
         await reply_and_log(update, context, f"🤔 Bhai, '{query_text}' jaisi koi transaction mili nahi.")
         context.user_data.pop('delete_query', None)
         return ConversationHandler.END
 
-    # Create a keyboard with the top 5 matches
     keyboard = [
         [InlineKeyboardButton(
             f"{txn.created_at.strftime('%d-%b')} - {txn.note} (₹{txn.amount})", 
@@ -43,12 +39,12 @@ async def delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE, sessi
     
     await reply_and_log(update, context, "Theek hai bhai, inmein se konsi transaction delete karni hai?", reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # The conversation remains in this state, waiting for a button click
+    # This state is defined in your states.py file
+    from .states import SELECTING_DELETE_CANDIDATE
     return SELECTING_DELETE_CANDIDATE
 
 
-@with_db_session
-async def delete_perform_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def delete_perform_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Performs the actual deletion after the user selects a transaction from the list.
     """
@@ -58,30 +54,30 @@ async def delete_perform_deletion(update: Update, context: ContextTypes.DEFAULT_
     txn_id_str = query.data.split('_')[-1]
     if not txn_id_str.isdigit():
         await edit_and_log(query, context, "Invalid selection. Please try again.")
+        from .states import SELECTING_DELETE_CANDIDATE
         return SELECTING_DELETE_CANDIDATE
 
     txn_id = int(txn_id_str)
     user_id = query.from_user.id
 
-    txn_to_delete = await db_writer.get_transaction_by_id(session, user_id, txn_id)
-    if not txn_to_delete:
-        await edit_and_log(query, context, "🤯 Transaction mil nahi rahi, shayad pehle se delete ho gayi.")
-        context.user_data.pop('delete_query', None)
-        return ConversationHandler.END
+    async with get_session() as session:
+        txn_to_delete = await db_writer.get_transaction_by_id(session, user_id, txn_id)
+        if not txn_to_delete:
+            await edit_and_log(query, context, "🤯 Transaction mil nahi rahi, shayad pehle se delete ho gayi.")
+            context.user_data.pop('delete_query', None)
+            return ConversationHandler.END
 
-    # Use the safe delete function that also updates the wallet balance
-    success = await db_writer.delete_transaction_and_update_wallet(session, txn_to_delete)
-    
-    if success:
-        # Get the updated wallet to show the new balance
-        updated_wallet = await db_writer.get_wallet_by_id(session, txn_to_delete.wallet_id)
-        confirmation_message = (
-            f"🗑️ Transaction for '{txn_to_delete.note}' has been deleted.\n\n"
-            f"Wallet '{updated_wallet.name}' balance is now **₹{updated_wallet.balance:.2f}**."
-        )
-        await edit_and_log(query, context, confirmation_message, parse_mode="Markdown")
-    else:
-        await edit_and_log(query, context, "🤯 Kuch gadbad ho gayi, delete nahi kar paaya.")
+        success = await db_writer.delete_transaction_and_update_wallet(session, txn_to_delete)
+        
+        if success:
+            updated_wallet = await db_writer.get_wallet_by_id(session, txn_to_delete.wallet_id)
+            confirmation_message = (
+                f"🗑️ Transaction for '{txn_to_delete.note}' has been deleted.\n\n"
+                f"Wallet '{updated_wallet.name}' balance is now **₹{updated_wallet.balance:.2f}**."
+            )
+            await edit_and_log(query, context, confirmation_message, parse_mode="Markdown")
+        else:
+            await edit_and_log(query, context, "🤯 Kuch gadbad ho gayi, delete nahi kar paaya.")
 
     context.user_data.pop('delete_query', None)
     return ConversationHandler.END

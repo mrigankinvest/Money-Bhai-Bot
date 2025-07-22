@@ -10,7 +10,8 @@ from telegram.ext import (
     CommandHandler
 )
 
-from db.database import with_db_session
+# --- Corrected Imports ---
+from db.database import get_session # Use the new session manager
 from db import db_writer
 from utils.telegram_helpers import reply_and_log, edit_and_log
 from .states import (
@@ -29,22 +30,19 @@ async def create_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     
-    # e.g., from 'create_wallet_start_Expense'
     wallet_category = query.data.split('_')[-1]
     context.user_data['new_wallet_category'] = wallet_category
     
     await edit_and_log(query, context, text=f"Okay, let's create a new '{wallet_category}' wallet. What would you like to name it?")
     return AWAITING_NEW_WALLET_NAME
 
-@with_db_session
-async def create_wallet_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def create_wallet_get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receives the name for the new wallet and asks for the balance."""
     context.user_data['new_wallet_name'] = update.message.text
     await reply_and_log(update, context, "Got it. Now, what is the initial balance? (Enter 0 if none)")
     return AWAITING_NEW_WALLET_BALANCE
 
-@with_db_session
-async def create_wallet_get_balance(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def create_wallet_get_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receives the balance and creates the wallet."""
     try:
         balance = float(update.message.text)
@@ -56,7 +54,8 @@ async def create_wallet_get_balance(update: Update, context: ContextTypes.DEFAUL
     name = context.user_data['new_wallet_name']
     category = context.user_data['new_wallet_category']
     
-    new_wallet = await db_writer.create_wallet(session, user_id, name, category, balance)
+    async with get_session() as session:
+        new_wallet = await db_writer.create_wallet(session, user_id, name, category, balance)
 
     keyboard = [[InlineKeyboardButton("✏️ Edit This Wallet", callback_data=f"edit_wallet_direct_{new_wallet.id}")]]
     await reply_and_log(
@@ -76,6 +75,7 @@ async def create_wallet_cancel(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop(key, None)
     return ConversationHandler.END
 
+# The ConversationHandler definition itself
 create_wallet_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(create_wallet_start, pattern='^create_wallet_start_')],
     states={
@@ -90,13 +90,15 @@ create_wallet_conv_handler = ConversationHandler(
 # === FLOW 2: EDIT AN EXISTING WALLET =========================================
 # =============================================================================
 
-@with_db_session
-async def edit_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def edit_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point for editing a wallet from a text command."""
-    wallets = await db_writer.get_wallets(session, update.effective_user.id)
+    async with get_session() as session:
+        wallets = await db_writer.get_wallets(session, update.effective_user.id)
+    
     if not wallets:
         await reply_and_log(update, context, "You don't have any wallets to edit.")
         return ConversationHandler.END
+        
     keyboard = [[InlineKeyboardButton(f"💳 {w.name}", callback_data=f"edit_wallet_select_{w.id}")] for w in wallets]
     await reply_and_log(update, context, "Which wallet would you like to edit?", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_WALLET_TO_EDIT
@@ -116,7 +118,6 @@ async def edit_wallet_direct_start(update: Update, context: ContextTypes.DEFAULT
 
 async def edit_wallet_select_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """After user selects a wallet, this asks which field to edit."""
-    # This state is reached from edit_wallet_start, not a direct button
     query = update.callback_query
     await query.answer()
     wallet_id = int(query.data.split('_')[-1])
@@ -144,23 +145,23 @@ async def edit_wallet_ask_value(update: Update, context: ContextTypes.DEFAULT_TY
         await edit_and_log(query, context, f"Okay, what should the new name be?")
     return AWAIT_NEW_WALLET_VALUE
 
-@with_db_session
-async def edit_wallet_get_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def edit_wallet_get_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receives the new value and performs the update."""
     query = update.callback_query
     field = context.user_data.get('edit_wallet_field')
     wallet_id = context.user_data.get('edit_wallet_id')
     
-    if query: # Value came from a button (e.g., category)
+    if query:
         await query.answer()
         new_value = query.data.split('_')[-1]
         message_to_edit = query.message
-    else: # Value came from a text message (e.g., name)
+    else:
         new_value = update.message.text
         message_to_edit = update.message
 
     updates = {field: new_value}
-    updated_wallet = await db_writer.update_wallet(session, wallet_id, updates)
+    async with get_session() as session:
+        updated_wallet = await db_writer.update_wallet(session, wallet_id, updates)
 
     reply_text = f"✅ Wallet updated successfully!\n\n**Name:** {updated_wallet.name}\n**Category:** {updated_wallet.category}" if updated_wallet else "Sorry, an error occurred."
     
@@ -174,10 +175,10 @@ async def edit_wallet_get_new_value(update: Update, context: ContextTypes.DEFAUL
     return ConversationHandler.END
 
 async def edit_wallet_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # A generic cancel function can be used here
     await reply_and_log(update, context, "Wallet edit cancelled.")
     return ConversationHandler.END
 
+# The ConversationHandler definition itself
 edit_wallet_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(edit_wallet_direct_start, pattern='^edit_wallet_direct_')],
     states={
@@ -196,15 +197,16 @@ edit_wallet_conv_handler = ConversationHandler(
 # === FLOW 3: DELETE A WALLET =================================================
 # =============================================================================
 
-@with_db_session
-async def delete_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def delete_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the wallet deletion confirmation process."""
     wallet_name = context.user_data.get('delete_wallet_name')
     if not wallet_name:
         await reply_and_log(update, context, "Which wallet do you want to delete? e.g., 'delete my bank wallet'.")
         return ConversationHandler.END
 
-    wallet = await db_writer.get_wallet_by_name(session, update.effective_user.id, wallet_name)
+    async with get_session() as session:
+        wallet = await db_writer.get_wallet_by_name(session, update.effective_user.id, wallet_name)
+        
     if not wallet:
         await reply_and_log(update, context, f"Sorry, I couldn't find a wallet named '{wallet_name}'.")
         return ConversationHandler.END
@@ -219,8 +221,7 @@ async def delete_wallet_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     await reply_and_log(update, context, warning_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return CONFIRM_WALLET_DELETION
 
-@with_db_session
-async def delete_wallet_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, session) -> int:
+async def delete_wallet_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the user's confirmation to delete the wallet."""
     query = update.callback_query
     await query.answer()
@@ -230,9 +231,10 @@ async def delete_wallet_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         await edit_and_log(query, context, "Something went wrong. Deletion cancelled for safety.")
         return ConversationHandler.END
 
-    wallet = await db_writer.get_wallet_by_id(session, wallet_id)
-    wallet_name = wallet.name if wallet else "unknown"
-    success = await db_writer.delete_wallet_and_associated_data(session, wallet_id)
+    async with get_session() as session:
+        wallet = await db_writer.get_wallet_by_id(session, wallet_id)
+        wallet_name = wallet.name if wallet else "unknown"
+        success = await db_writer.delete_wallet_and_associated_data(session, wallet_id)
 
     if success:
         await edit_and_log(query, context, f"✅ The wallet '{wallet_name}' and all its data have been permanently deleted.")
@@ -252,7 +254,7 @@ async def delete_wallet_cancel(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop(key, None)
     return ConversationHandler.END
 
-# Note: This handler is only entered via a state from message_handler, so entry_points is empty.
+# The ConversationHandler definition itself
 delete_wallet_conv_handler = ConversationHandler(
     entry_points=[],
     states={

@@ -9,15 +9,23 @@ from telegram.ext import (
     filters,
     ConversationHandler
 )
-from config import BOT_TOKEN
-from db.database import create_db_and_tables
+# Using your config variable
+from config import BOT_TOKEN 
+# Using your database function
+from db.database import create_db_and_tables 
+from bot_setup import set_bot_commands
 
 # ===================================================================
 # 1. Import all handlers from their modular files
 # ===================================================================
 
 # --- Simple Commands ---
-from handlers.commands import start, summary, help_command, fix_stuck_wallets
+from handlers.commands import (
+    summary, help_command, fix_stuck_wallets, 
+    # Import all the new menu commands
+    home, aboutme, actions, records, investments, statistics,
+    plannedpayments, budgets, debt, goals, follow, contact
+)
 
 # --- Generic Callback Router ---
 from handlers.callbacks import handle_callback
@@ -27,6 +35,8 @@ from handlers.message_handler import handle_message
 
 # --- Conversation State Handlers ---
 from handlers.conversations.states import *
+# Import the new onboarding handler and its states
+from handlers.conversations import onboarding 
 from handlers.conversations.add_txn import (
     confirm_default_wallet, receive_wallet_name, handle_new_wallet_choice, add_txn_cancel,
     handle_assignment_strategy, assign_single_wallet_to_all, assign_individual_wallet_step, back_to_strategy
@@ -39,11 +49,11 @@ from handlers.conversations.delete_txn import (
     delete_start, delete_perform_deletion, delete_cancel
 )
 from handlers.conversations.manage_wallets import (
-    create_wallet_conv_handler, # This one is self-contained, starting from a button
+    create_wallet_conv_handler, 
     edit_wallet_start, edit_wallet_select_field, edit_wallet_ask_value, edit_wallet_get_new_value, edit_wallet_cancel,
     delete_wallet_start, delete_wallet_confirm, delete_wallet_cancel as manage_wallet_delete_cancel
 )
-from handlers.conversations.analysis import analysis_conv_handler # Self-contained
+from handlers.conversations.analysis import analysis_conv_handler 
 
 # ===================================================================
 # 2. Configure Logging
@@ -65,8 +75,9 @@ logger = logging.getLogger(__name__)
 async def post_init(app: Application):
     """Post-initialization function to create database tables."""
     logger.info("Creating database tables...")
-    await create_db_and_tables()
+    await create_db_and_tables() 
     logger.info("Database tables created or already exist.")
+    await set_bot_commands(app)
 
 
 def main() -> None:
@@ -75,38 +86,41 @@ def main() -> None:
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set!")
 
     logger.info("🚀 Money Bhai Bot is starting...")
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build() 
 
     # ===================================================================
-    # 3. Define the Master ConversationHandler
+    # 3. Define Conversation Handlers
     # ===================================================================
+
+    onboarding_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", onboarding.ask_for_name)],
+        states={
+            onboarding.GET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, onboarding.ask_for_name_confirmation)],
+            onboarding.CONFIRM_NAME: [
+                CallbackQueryHandler(onboarding.save_name_confirmed, pattern="^confirm_name$"),
+                CallbackQueryHandler(onboarding.change_name, pattern="^change_name$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", onboarding.cancel)],
+        per_user=True,
+        per_chat=True,
+    )
     
-    # This handler orchestrates all conversations that start from a text message.
     main_conv_handler = ConversationHandler(
         entry_points=[
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
-            # Direct entry for editing a transaction from a button (e.g., post-add menu)
             CallbackQueryHandler(edit_transaction_direct_start, pattern='^edit_action_txn_')
         ],
         states={
-            # States from add_txn.py (single add flow)
             CONFIRM_DEFAULT_WALLET: [CallbackQueryHandler(confirm_default_wallet, pattern='^default_wallet_')],
             AWAITING_WALLET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_wallet_name)],
             HANDLE_UNKNOWN_WALLET: [CallbackQueryHandler(handle_new_wallet_choice, pattern='^(create_wallet_confirm|add_txn_cancel)$')],
-            
-            # States from add_txn.py (multi-add flow)
             AWAIT_ASSIGNMENT_STRATEGY: [CallbackQueryHandler(handle_assignment_strategy, pattern='^multi_tx_strategy_')],
             AWAIT_SINGLE_WALLET_CHOICE: [CallbackQueryHandler(assign_single_wallet_to_all, pattern='^multi_tx_select_wallet_'), CallbackQueryHandler(back_to_strategy, pattern='^multi_tx_strategy_back$')],
             ASSIGNING_INDIVIDUALLY: [CallbackQueryHandler(assign_individual_wallet_step, pattern='^multi_tx_assign_'), CallbackQueryHandler(back_to_strategy, pattern='^multi_tx_strategy_back$')],
-
-            # States from edit_txn.py
             SELECTING_EDIT_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_start), CallbackQueryHandler(edit_select_field, pattern='^edit_select_')],
             GETTING_NEW_EDIT_VALUE: [CallbackQueryHandler(edit_get_field_and_ask_value, pattern='^edit_field_'), MessageHandler(filters.TEXT & ~filters.COMMAND, edit_get_new_value)],
-
-            # State from delete_txn.py
             SELECTING_DELETE_CANDIDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_start), CallbackQueryHandler(delete_perform_deletion, pattern='^delete_confirm_')],
-
-            # States from manage_wallets.py
             SELECT_WALLET_TO_EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_wallet_start), CallbackQueryHandler(edit_wallet_select_field, pattern='^edit_wallet_select_')],
             SELECT_WALLET_FIELD: [CallbackQueryHandler(edit_wallet_ask_value, pattern='^edit_wallet_field_')],
             AWAIT_NEW_WALLET_VALUE: [CallbackQueryHandler(edit_wallet_get_new_value, pattern='^edit_wallet_value_'), MessageHandler(filters.TEXT & ~filters.COMMAND, edit_wallet_get_new_value)],
@@ -117,28 +131,43 @@ def main() -> None:
             CallbackQueryHandler(delete_cancel, pattern='^delete_cancel$'),
             CallbackQueryHandler(add_txn_cancel, pattern='^add_txn_cancel$'),
             CallbackQueryHandler(manage_wallet_delete_cancel, pattern='^cancel_wallet_deletion$'),
-            CommandHandler("start", start),
+            CommandHandler("start", onboarding.ask_for_name),
         ],
-        per_message=False # Allows multiple conversations to happen without interfering
+        per_message=False 
     )
 
     # ===================================================================
     # 4. Register All Handlers with the Application
     # ===================================================================
 
-    # Add conversation handlers first, as they are more specific
+    # The new onboarding handler now manages the /start command.
+    app.add_handler(onboarding_conv_handler)
+    
+    # Your existing conversation handlers
     app.add_handler(main_conv_handler)
-    app.add_handler(create_wallet_conv_handler) # From manage_wallets.py
-    app.add_handler(analysis_conv_handler)      # From analysis.py
+    app.add_handler(create_wallet_conv_handler)
+    app.add_handler(analysis_conv_handler)
 
-    # Add simple command handlers
-    app.add_handler(CommandHandler("start", start))
+    # Your existing simple command handlers
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("fix", fix_stuck_wallets))
 
-    # Add the generic callback handler last as a fallback for any button clicks
-    # not caught by a conversation.
+    # Add handlers for all the new menu commands
+    app.add_handler(CommandHandler("home", home))
+    app.add_handler(CommandHandler("aboutme", aboutme))
+    app.add_handler(CommandHandler("actions", actions))
+    app.add_handler(CommandHandler("records", records))
+    app.add_handler(CommandHandler("investments", investments))
+    app.add_handler(CommandHandler("statistics", statistics))
+    app.add_handler(CommandHandler("plannedpayments", plannedpayments))
+    app.add_handler(CommandHandler("budgets", budgets))
+    app.add_handler(CommandHandler("debt", debt))
+    app.add_handler(CommandHandler("goals", goals))
+    app.add_handler(CommandHandler("follow", follow))
+    app.add_handler(CommandHandler("contact", contact))
+
+    # Generic callback handler
     app.add_handler(CallbackQueryHandler(handle_callback))
     
     # ===================================================================
