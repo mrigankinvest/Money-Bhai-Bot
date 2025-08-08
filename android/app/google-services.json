@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "145139544944",
+    "project_id": "money-bhai-470c2",
+    "storage_bucket": "money-bhai-470c2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:145139544944:android:4ff4035bb97d77473355b5",
+        "android_client_info": {
+          "package_name": "com.example.money_bhai"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAIS6YbA6nT-dCCIVRGPQnCeLBz4HQOBkY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
